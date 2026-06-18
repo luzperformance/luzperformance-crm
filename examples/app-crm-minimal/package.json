@@ -10,7 +10,8 @@
     "format": "prettier --write src",
     "lint": "eslint src --fix",
     "refine": "refine",
-    "start": "refine start"
+    "start": "refine start",
+    "test": "vitest run"
   },
   "dependencies": {
     "@ant-design/cssinjs": "^1.17.2",

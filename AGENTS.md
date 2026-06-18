@@ -16,6 +16,12 @@ Para a issue #1, o escopo restrito é:
 
 Não instale dependências, não rode bootstrap pesado e não altere código do app enquanto a issue não pedir explicitamente.
 
+## Regra de validação do harness
+
+Não é necessário validar localmente neste ambiente/harness após implementar issues do CRM. O Vinícius valida na máquina local dele.
+
+Se precisar de evidência antes de responder, use inspeção de diff/status e sinalize claramente que a validação local ficou para o Vinícius. Não instalar dependências, não baixar `node_modules` e não rodar suíte/build local salvo pedido explícito.
+
 ## Fonte visual obrigatória
 
 Qualquer decisão visual do CRM deve usar apenas o `DESIGN.md` do repo `luzperformance/appsite` como fonte de verdade.
