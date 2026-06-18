@@ -4,6 +4,7 @@ import {
   approveCommunicationTemplate,
   assertCommunicationTemplateCanBeUsed,
   buildAdsConversionExportBoundary,
+  buildCrmDashboardSnapshot,
   buildCommunicationTemplateDraft,
   canUseCommunicationTemplate,
   contractPlanTypes,
@@ -855,6 +856,154 @@ describe("CRM lead → deal → contract domain model", () => {
         contractValueCents: 600000,
         renewalContractIds: [renewalDueContract.id],
       }),
+    ]);
+  });
+
+  it("builds a HubSpot-like dashboard snapshot for funnel, revenue, attribution, and renewals", () => {
+    const repository = createInMemoryCrmRepository({
+      clock: () => new Date("2026-06-18T00:00:00.000Z"),
+    });
+
+    const { lead: blogLead } = createLeadWithAttribution(repository, {
+      contact: {
+        fullName: "Lead Blog — contrato semestral",
+      },
+      lead: {
+        lifecycleStage: "sql",
+        interest: "Acompanhamento com redução de danos",
+      },
+      attribution: {
+        channel: "blog",
+        campaign: "artigo-hipertrofia-segura",
+      },
+    });
+    const blogDeal = moveLeadToDeal(repository, blogLead.id, {
+      title: "Contrato semestral Blog",
+      stage: "won",
+      valueCents: 600000,
+    });
+    createContractFromDeal(repository, blogDeal.id, {
+      planType: "semiannual",
+      startDate: "2026-06-20",
+      valueCents: 600000,
+    });
+
+    const { lead: adsLead } = createLeadWithAttribution(repository, {
+      contact: {
+        fullName: "Lead Ads — contrato anual",
+      },
+      lead: {
+        lifecycleStage: "sql",
+      },
+      attribution: {
+        channel: "ads",
+        campaign: "google-performance-responsavel",
+      },
+    });
+    const adsDeal = moveLeadToDeal(repository, adsLead.id, {
+      title: "Contrato anual Ads",
+      stage: "won",
+      valueCents: 1200000,
+    });
+    createContractFromDeal(repository, adsDeal.id, {
+      planType: "annual",
+      startDate: "2026-07-01",
+      valueCents: 1200000,
+    });
+
+    const { lead: referralLead } = createLeadWithAttribution(repository, {
+      contact: {
+        fullName: "Indicação — contrato mensal",
+      },
+      lead: {
+        lifecycleStage: "sql",
+      },
+      attribution: {
+        channel: "referral",
+        campaign: "indicacao-paciente-ativo",
+      },
+    });
+    const referralDeal = moveLeadToDeal(repository, referralLead.id, {
+      title: "Contrato mensal indicação",
+      stage: "won",
+      valueCents: 100000,
+    });
+    const referralContract = createContractFromDeal(repository, referralDeal.id, {
+      planType: "monthly",
+      startDate: "2026-08-01",
+      valueCents: 100000,
+    });
+    markContractsDueForRenewal(repository, "2026-09-01");
+
+    const dashboard = buildCrmDashboardSnapshot(repository);
+
+    expect(dashboard.metrics).toEqual({
+      funnelDeals: 3,
+      pipelineValueCents: 1900000,
+      activeRevenueCents: 1900000,
+      renewalDueCount: 1,
+    });
+    expect(dashboard.funnelRows).toEqual([
+      {
+        stage: "contract_active",
+        label: "Contrato ativo",
+        count: 2,
+        valueCents: 1800000,
+      },
+      {
+        stage: "renewal_due",
+        label: "Renovação pendente",
+        count: 1,
+        valueCents: 100000,
+      },
+    ]);
+    expect(dashboard.revenueRows).toEqual([
+      {
+        planType: "monthly",
+        label: "Mensal",
+        count: 1,
+        revenueCents: 100000,
+      },
+      {
+        planType: "semiannual",
+        label: "Semestral",
+        count: 1,
+        revenueCents: 600000,
+      },
+      {
+        planType: "annual",
+        label: "Anual",
+        count: 1,
+        revenueCents: 1200000,
+      },
+    ]);
+    expect(dashboard.attributionRows).toEqual([
+      {
+        channel: "ads",
+        label: "Ads",
+        count: 1,
+        revenueCents: 1200000,
+      },
+      {
+        channel: "blog",
+        label: "Blog",
+        count: 1,
+        revenueCents: 600000,
+      },
+      {
+        channel: "referral",
+        label: "Indicação",
+        count: 1,
+        revenueCents: 100000,
+      },
+    ]);
+    expect(dashboard.renewalRows).toEqual([
+      {
+        contactName: "Indicação — contrato mensal",
+        planLabel: "Mensal",
+        renewalDueAt: referralContract.renewalDueAt,
+        valueCents: 100000,
+      },
     ]);
   });
 

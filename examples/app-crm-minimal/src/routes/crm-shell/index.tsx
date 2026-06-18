@@ -21,6 +21,7 @@ import {
 } from "antd";
 
 import {
+  buildCrmDashboardSnapshot,
   createContractFromDeal,
   createInMemoryCrmRepository,
   createLeadWithAttribution,
@@ -31,7 +32,6 @@ import {
   markContractsDueForRenewal,
   moveDealThroughPipeline,
   moveLeadToDeal,
-  type AttributionChannel,
   type ContractPlanType,
   type DealStage,
   type InMemoryCrmRepository,
@@ -266,157 +266,13 @@ const seedDashboardContract = (
   return contract;
 };
 
-type FunnelDashboardRow = {
-  label: string;
-  count: number;
-  valueCents: number;
-};
-
-type RevenueDashboardRow = {
-  planType: ContractPlanType;
-  label: string;
-  count: number;
-  revenueCents: number;
-};
-
-type AttributionDashboardRow = {
-  channel: AttributionChannel;
-  count: number;
-  revenueCents: number;
-};
-
-type RenewalDashboardRow = {
-  contactName: string;
-  planLabel: string;
-  renewalDueAt: string;
-  valueCents: number;
-};
-
-const buildDashboardSnapshot = (repository: InMemoryCrmRepository) => {
-  const pipelineGroups = listPipelineDeals(repository);
-  const contracts = repository.listContracts();
-  const funnelRows: FunnelDashboardRow[] = pipelineGroups
-    .filter((group) => group.deals.length > 0)
-    .map((group) => ({
-      label: group.label,
-      count: group.deals.length,
-      valueCents: group.deals.reduce((total, deal) => {
-        return total + (deal.valueCents ?? 0);
-      }, 0),
-    }));
-  const revenueRows = contractPlanLabels.map((item) => {
-    const matchingContracts = contracts.filter((contract) => {
-      return contract.planType === item.planType;
-    });
-
-    return {
-      ...item,
-      count: matchingContracts.length,
-      revenueCents: matchingContracts.reduce((total, contract) => {
-        return total + contract.valueCents;
-      }, 0),
-    };
-  });
-  const attributionRows = buildAttributionRows(repository);
-  const renewalRows = contracts
-    .filter((contract) => {
-      return contract.status === "renewal_due";
-    })
-    .map((contract) => ({
-      contactName:
-        repository.getContact(contract.contactId)?.fullName ??
-        "Contato sem nome",
-      planLabel: contractPlanLabelByType[contract.planType],
-      renewalDueAt: contract.renewalDueAt,
-      valueCents: contract.valueCents,
-    }))
-    .sort((left, right) => left.renewalDueAt.localeCompare(right.renewalDueAt));
-  const activeRevenueCents = contracts.reduce((total, contract) => {
-    return total + contract.valueCents;
-  }, 0);
-
-  return {
-    funnelRows,
-    revenueRows,
-    attributionRows,
-    renewalRows,
-    metrics: {
-      funnelDeals: pipelineGroups.reduce((total, group) => {
-        return total + group.deals.length;
-      }, 0),
-      pipelineValueCents: pipelineGroups.reduce((total, group) => {
-        return (
-          total +
-          group.deals.reduce((groupTotal, deal) => {
-            return groupTotal + (deal.valueCents ?? 0);
-          }, 0)
-        );
-      }, 0),
-      activeRevenueCents,
-      renewalDueCount: renewalRows.length,
-    },
-  };
-};
-
-const buildAttributionRows = (
-  repository: InMemoryCrmRepository,
-): AttributionDashboardRow[] => {
-  const rowsByChannel = new Map<AttributionChannel, AttributionDashboardRow>();
-
-  for (const contract of repository.listContracts()) {
-    const attribution = contract.sourceAttributionIds
-      .map((id) => repository.getSourceAttribution(id))
-      .find(Boolean);
-    const channel = attribution?.channel ?? "other";
-    const current = rowsByChannel.get(channel) ?? {
-      channel,
-      count: 0,
-      revenueCents: 0,
-    };
-
-    rowsByChannel.set(channel, {
-      channel,
-      count: current.count + 1,
-      revenueCents: current.revenueCents + contract.valueCents,
-    });
-  }
-
-  return Array.from(rowsByChannel.values()).sort((left, right) => {
-    return right.revenueCents - left.revenueCents;
-  });
-};
-
-const contractPlanLabels: Array<{
-  planType: ContractPlanType;
-  label: string;
-}> = [
-  { planType: "monthly", label: "Mensal" },
-  { planType: "semiannual", label: "Semestral" },
-  { planType: "annual", label: "Anual" },
-];
-
-const contractPlanLabelByType = Object.fromEntries(
-  contractPlanLabels.map((item) => [item.planType, item.label]),
-) as Record<ContractPlanType, string>;
-
-const attributionChannelLabels: Record<AttributionChannel, string> = {
-  blog: "Blog",
-  ads: "Ads",
-  referral: "Indicação",
-  organic: "Orgânico",
-  whatsapp_dm: "WhatsApp/DM",
-  instagram: "Instagram",
-  direct: "Direto",
-  other: "Outro",
-};
-
 const formatCurrency = (valueCents: number) =>
   `R$ ${(valueCents / 100).toLocaleString("pt-BR")}`;
 
 export const CrmDashboardPage = () => {
   const [repository] = useState(buildDemoDashboardRepository);
   const dashboard = useMemo(
-    () => buildDashboardSnapshot(repository),
+    () => buildCrmDashboardSnapshot(repository),
     [repository],
   );
 
@@ -522,7 +378,7 @@ export const CrmDashboardPage = () => {
               {dashboard.attributionRows.map((row) => (
                 <DashboardListRow
                   key={row.channel}
-                  label={attributionChannelLabels[row.channel]}
+                  label={row.label}
                   metric={`${row.count} contrato(s)`}
                   detail={formatCurrency(row.revenueCents)}
                 />
