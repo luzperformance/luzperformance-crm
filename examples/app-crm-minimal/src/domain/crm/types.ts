@@ -72,6 +72,7 @@ export type AttributionChannel =
   | "other";
 
 export type AuditAction =
+  | "blog_content_event.created"
   | "contact.created"
   | "lead.created"
   | "deal.created"
@@ -87,6 +88,7 @@ export type AuditAction =
   | "contract_status.changed";
 
 export type CrmCollectionName =
+  | "blogContentEvents"
   | "contacts"
   | "leads"
   | "deals"
@@ -109,6 +111,19 @@ export interface Contact extends CrmEntity {
   lifecycleStage: LifecycleStage;
   communicationPreferences: CommunicationPreferences;
   ownerId?: string;
+}
+
+export interface BlogContentEvent extends CrmEntity {
+  articleSlug: string;
+  articleTitle?: string;
+  category: string;
+  topic?: string;
+  cta: string;
+  occurredAt: string;
+  visitorId?: string;
+  sessionId?: string;
+  contactId?: string;
+  leadId?: string;
 }
 
 export interface SourceAttribution extends CrmEntity {
@@ -208,7 +223,24 @@ export interface AuditLog extends CrmEntity {
   metadata?: Record<string, string | number | boolean | null>;
 }
 
+export interface LeadProfileWithBlogTouchpoints {
+  lead: Lead;
+  contact: Contact;
+  sourceAttributions: SourceAttribution[];
+  blogTouchpoints: BlogContentEvent[];
+}
+
+export interface BlogAttributionOutcome {
+  event: BlogContentEvent;
+  leadIds: string[];
+  dealIds: string[];
+  contractIds: string[];
+  contractValueCents: number;
+  renewalContractIds: string[];
+}
+
 export interface CrmEntitiesByCollection {
+  blogContentEvents: BlogContentEvent;
   contacts: Contact;
   leads: Lead;
   deals: Deal;
@@ -218,6 +250,13 @@ export interface CrmEntitiesByCollection {
   sourceAttributions: SourceAttribution;
   auditLogs: AuditLog;
 }
+
+export type NewBlogContentEvent = Omit<
+  BlogContentEvent,
+  keyof CrmEntity | "occurredAt"
+> & {
+  occurredAt?: string;
+};
 
 export type NewContact = Omit<
   Contact,

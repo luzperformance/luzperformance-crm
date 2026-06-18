@@ -606,6 +606,120 @@ describe("CRM lead → deal → contract domain model", () => {
     });
   });
 
+  it("connects blog touchpoints to lead, deal, contract, and renewal outcomes", () => {
+    const repository = createInMemoryCrmRepository({
+      clock: () => new Date("2026-06-18T00:00:00.000Z"),
+    });
+    const { contact, lead, attribution: firstTouch } = createLeadWithAttribution(
+      repository,
+      {
+        contact: {
+          fullName: "Lead influenciado pelo Blog",
+          email: "blog-lead@example.com",
+        },
+        lead: {
+          lifecycleStage: "mql",
+          interest: "Avaliação médica para performance com segurança",
+        },
+        attribution: {
+          channel: "ads",
+          campaign: "meta-captacao-junho",
+          landingPage: "https://luzperformance.com.br/lp/performance",
+          utmSource: "meta",
+          utmMedium: "paid_social",
+          utmCampaign: "meta-captacao-junho",
+          gclid: "gclid-primeiro-toque",
+        },
+      },
+    );
+
+    const blogTouchpoint = repository.ingestBlogContentEvent({
+      articleSlug: "hipertrofia-com-seguranca",
+      articleTitle: "Hipertrofia com segurança médica",
+      category: "hipertrofia",
+      topic: "performance",
+      cta: "avaliacao-medica",
+      occurredAt: "2026-06-19T12:00:00.000Z",
+      visitorId: "visitor_123",
+      sessionId: "session_blog_123",
+      contactId: contact.id,
+      leadId: lead.id,
+    });
+    const deal = moveLeadToDeal(repository, lead.id, {
+      title: "Acompanhamento semestral LuzPerformance",
+      stage: "proposal_sent",
+      valueCents: 600000,
+    });
+    repository.updateDealStage(deal.id, "won");
+    const contract = createContractFromDeal(repository, deal.id, {
+      planType: "semiannual",
+      startDate: "2026-06-20",
+      valueCents: 600000,
+    });
+    const [renewalDueContract] = markContractsDueForRenewal(
+      repository,
+      "2026-12-20",
+    );
+
+    expect(blogTouchpoint).toMatchObject({
+      articleSlug: "hipertrofia-com-seguranca",
+      category: "hipertrofia",
+      topic: "performance",
+      cta: "avaliacao-medica",
+      occurredAt: "2026-06-19T12:00:00.000Z",
+      visitorId: "visitor_123",
+      sessionId: "session_blog_123",
+      contactId: contact.id,
+      leadId: lead.id,
+    });
+    expect(repository.getLeadProfileWithBlogTouchpoints(lead.id)).toMatchObject({
+      lead: {
+        id: lead.id,
+      },
+      contact: {
+        id: contact.id,
+      },
+      sourceAttributions: [
+        {
+          id: firstTouch.id,
+          channel: "ads",
+        },
+      ],
+      blogTouchpoints: [
+        {
+          id: blogTouchpoint.id,
+          articleSlug: "hipertrofia-com-seguranca",
+        },
+      ],
+    });
+    expect(repository.getSourceAttribution(firstTouch.id)).toMatchObject({
+      channel: "ads",
+      campaign: "meta-captacao-junho",
+      utmSource: "meta",
+      utmMedium: "paid_social",
+      utmCampaign: "meta-captacao-junho",
+      gclid: "gclid-primeiro-toque",
+      firstTouchAt: "2026-06-18T00:00:00.000Z",
+      latestChannel: "ads",
+      lastTouchAt: "2026-06-18T00:00:00.000Z",
+    });
+    expect(repository.listBlogAttributionOutcomes()).toEqual([
+      expect.objectContaining({
+        event: expect.objectContaining({
+          id: blogTouchpoint.id,
+          articleSlug: "hipertrofia-com-seguranca",
+          category: "hipertrofia",
+          cta: "avaliacao-medica",
+        }),
+        leadIds: [lead.id],
+        dealIds: [deal.id],
+        contractIds: [contract.id],
+        contractValueCents: 600000,
+        renewalContractIds: [renewalDueContract.id],
+      }),
+    ]);
+  });
+
   it("ignores internal site events without referrer before moving attribution to a deal", () => {
     const repository = createInMemoryCrmRepository({
       clock: () => new Date("2026-06-18T00:00:00.000Z"),

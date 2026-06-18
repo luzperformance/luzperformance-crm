@@ -1,6 +1,8 @@
 import { buildMedicalGovernanceAuditMetadata } from "./medical-governance-policy";
 import type {
   AuditLog,
+  BlogAttributionOutcome,
+  BlogContentEvent,
   CommunicationPreferences,
   Contact,
   Consent,
@@ -11,7 +13,9 @@ import type {
   CrmEntity,
   Deal,
   Lead,
+  LeadProfileWithBlogTouchpoints,
   NewAuditLog,
+  NewBlogContentEvent,
   NewConsent,
   NewContact,
   NewContract,
@@ -24,6 +28,7 @@ import type {
 } from "./types";
 
 type CreateInputByCollection = {
+  blogContentEvents: NewBlogContentEvent;
   contacts: NewContact;
   leads: NewLead;
   deals: NewDeal;
@@ -65,6 +70,7 @@ const defaultCommunicationPreferences: CommunicationPreferences = {
 };
 
 const collections: CrmCollectionName[] = [
+  "blogContentEvents",
   "contacts",
   "leads",
   "deals",
@@ -122,6 +128,129 @@ export class InMemoryCrmRepository {
 
   getContact(id: string): Contact | undefined {
     return this.get("contacts", id);
+  }
+
+  createBlogContentEvent(input: NewBlogContentEvent): BlogContentEvent {
+    if (
+      !input.visitorId &&
+      !input.sessionId &&
+      !input.contactId &&
+      !input.leadId
+    ) {
+      throw new Error(
+        "Blog content events require visitor, session, contact, or lead linkage",
+      );
+    }
+
+    const event = this.create("blogContentEvents", {
+      ...input,
+      occurredAt: input.occurredAt ?? this.now(),
+    });
+
+    this.createAuditLog({
+      actorId: "system",
+      action: "blog_content_event.created",
+      entityType: "blogContentEvents",
+      entityId: event.id,
+      contactId: event.contactId,
+      metadata: {
+        articleSlug: event.articleSlug,
+        category: event.category,
+        cta: event.cta,
+        hasContactLinkage: Boolean(event.contactId),
+        hasLeadLinkage: Boolean(event.leadId),
+      },
+    });
+
+    return event;
+  }
+
+  ingestBlogContentEvent(input: NewBlogContentEvent): BlogContentEvent {
+    return this.createBlogContentEvent(input);
+  }
+
+  getBlogContentEvent(id: string): BlogContentEvent | undefined {
+    return this.get("blogContentEvents", id);
+  }
+
+  listBlogContentEventsByContact(contactId: string): BlogContentEvent[] {
+    return this.list("blogContentEvents").filter((event) => {
+      return event.contactId === contactId;
+    });
+  }
+
+  listBlogTouchpointsForLead(leadId: string): BlogContentEvent[] {
+    const lead = this.getLead(leadId);
+
+    if (!lead) {
+      throw new Error(`Lead not found: ${leadId}`);
+    }
+
+    return this.list("blogContentEvents").filter((event) => {
+      return event.leadId === lead.id || event.contactId === lead.contactId;
+    });
+  }
+
+  getLeadProfileWithBlogTouchpoints(
+    leadId: string,
+  ): LeadProfileWithBlogTouchpoints {
+    const lead = this.getLead(leadId);
+
+    if (!lead) {
+      throw new Error(`Lead not found: ${leadId}`);
+    }
+
+    const contact = this.getContact(lead.contactId);
+
+    if (!contact) {
+      throw new Error(`Contact not found: ${lead.contactId}`);
+    }
+
+    return {
+      lead,
+      contact,
+      sourceAttributions: this.listSourceAttributionsByContact(contact.id),
+      blogTouchpoints: this.listBlogTouchpointsForLead(lead.id),
+    };
+  }
+
+  listBlogAttributionOutcomes(): BlogAttributionOutcome[] {
+    return this.list("blogContentEvents").map((event) => {
+      const leads = this.list("leads").filter((lead) => {
+        return lead.id === event.leadId || lead.contactId === event.contactId;
+      });
+      const leadIds = leads.map((lead) => lead.id);
+      const deals = this.list("deals").filter((deal) => {
+        return (
+          leadIds.includes(deal.leadId) || deal.contactId === event.contactId
+        );
+      });
+      const dealIds = deals.map((deal) => deal.id);
+      const contracts = this.list("contracts").filter((contract) => {
+        return (
+          dealIds.includes(contract.dealId) ||
+          contract.contactId === event.contactId
+        );
+      });
+
+      return {
+        event,
+        leadIds,
+        dealIds,
+        contractIds: contracts.map((contract) => contract.id),
+        contractValueCents: contracts.reduce((total, contract) => {
+          return total + contract.valueCents;
+        }, 0),
+        renewalContractIds: contracts
+          .filter((contract) => {
+            return (
+              contract.status === "renewal_due" ||
+              contract.status === "renewed"
+            );
+          })
+          .map((contract) => contract.id),
+      };
+    });
   }
 
   createSourceAttribution(input: NewSourceAttribution): SourceAttribution {
