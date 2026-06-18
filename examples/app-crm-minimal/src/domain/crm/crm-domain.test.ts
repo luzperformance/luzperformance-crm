@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  approveCommunicationTemplate,
+  assertCommunicationTemplateCanBeUsed,
   buildAdsConversionExportBoundary,
+  buildCommunicationTemplateDraft,
+  canUseCommunicationTemplate,
   contractPlanTypes,
   createContractFromDeal,
   createInMemoryCrmRepository,
@@ -14,6 +18,8 @@ import {
   moveDealThroughPipeline,
   moveLeadToDeal,
   recordAttributionTouch,
+  recordCommunicationTemplateMedicalReview,
+  submitCommunicationTemplateForApproval,
 } from ".";
 
 describe("CRM lead → deal → contract domain model", () => {
@@ -343,6 +349,138 @@ describe("CRM lead → deal → contract domain model", () => {
           },
         }),
       ]),
+    );
+  });
+
+  it("approves non-sensitive communication templates before use", () => {
+    const draft = buildCommunicationTemplateDraft({
+      id: "template-follow-up-seguro",
+      name: "Follow-up operacional curto",
+      channel: "whatsapp",
+      audience: "lead",
+      purpose: "follow_up",
+      body: "Oi, passando para organizar o próximo passo da sua avaliação com a equipe.",
+    });
+
+    expect(draft).toMatchObject({
+      approvalStatus: "draft",
+      medicalReview: {
+        required: false,
+        status: "not_required",
+      },
+    });
+    expect(canUseCommunicationTemplate(draft)).toBe(false);
+
+    const pending = submitCommunicationTemplateForApproval(draft, {
+      actorId: "crm-operator",
+      at: "2026-06-18T10:20:00.000Z",
+    });
+    const approved = approveCommunicationTemplate(pending, {
+      actorId: "dr-vinicius",
+      at: "2026-06-18T10:25:00.000Z",
+    });
+
+    expect(approved).toMatchObject({
+      approvalStatus: "approved",
+      approval: {
+        submittedById: "crm-operator",
+        submittedAt: "2026-06-18T10:20:00.000Z",
+        approvedById: "dr-vinicius",
+        approvedAt: "2026-06-18T10:25:00.000Z",
+      },
+    });
+    expect(canUseCommunicationTemplate(approved)).toBe(true);
+    expect(() => assertCommunicationTemplateCanBeUsed(approved)).not.toThrow();
+  });
+
+  it("blocks sensitive communication templates until medical review approves them", () => {
+    const sensitiveDraft = buildCommunicationTemplateDraft({
+      id: "template-review-required",
+      name: "Resposta sobre exames e testosterona",
+      channel: "whatsapp",
+      audience: "lead",
+      purpose: "operational",
+      body:
+        "Antes de falar sobre exames, sintomas ou dose de testosterona, o médico precisa revisar seu caso.",
+    });
+    const pending = submitCommunicationTemplateForApproval(sensitiveDraft, {
+      actorId: "crm-operator",
+      at: "2026-06-18T10:30:00.000Z",
+    });
+
+    expect(pending.medicalReview).toMatchObject({
+      required: true,
+      status: "medical_review_required",
+    });
+    expect(pending.medicalReview.matchedCategories).toEqual(
+      expect.arrayContaining(["symptoms", "exams", "hormones", "dose"]),
+    );
+    expect(() =>
+      approveCommunicationTemplate(pending, {
+        actorId: "crm-manager",
+        at: "2026-06-18T10:35:00.000Z",
+      }),
+    ).toThrow("Medical review is required before template approval");
+    expect(() => assertCommunicationTemplateCanBeUsed(pending)).toThrow(
+      "Communication template must be approved and pass medical review before use",
+    );
+
+    const medicallyReviewed = recordCommunicationTemplateMedicalReview(pending, {
+      actorId: "dr-vinicius",
+      at: "2026-06-18T10:40:00.000Z",
+      decision: "approved",
+    });
+    const approved = approveCommunicationTemplate(medicallyReviewed, {
+      actorId: "crm-manager",
+      at: "2026-06-18T10:45:00.000Z",
+    });
+
+    expect(approved).toMatchObject({
+      approvalStatus: "approved",
+      medicalReview: {
+        status: "medical_review_approved",
+        reviewedById: "dr-vinicius",
+        reviewedAt: "2026-06-18T10:40:00.000Z",
+      },
+    });
+    expect(canUseCommunicationTemplate(approved)).toBe(true);
+  });
+
+  it("keeps medically rejected communication templates blocked", () => {
+    const rejected = recordCommunicationTemplateMedicalReview(
+      submitCommunicationTemplateForApproval(
+        buildCommunicationTemplateDraft({
+          id: "template-medical-rejected",
+          name: "Promessa inadequada de resultado hormonal",
+          channel: "whatsapp",
+          audience: "lead",
+          purpose: "marketing",
+          body:
+            "Podemos ajustar hormônios e dose para garantir resultado de performance.",
+        }),
+        {
+          actorId: "crm-operator",
+          at: "2026-06-18T11:00:00.000Z",
+        },
+      ),
+      {
+        actorId: "dr-vinicius",
+        at: "2026-06-18T11:05:00.000Z",
+        decision: "rejected",
+        reason: "Promessa e linguagem clínica inadequadas para template.",
+      },
+    );
+
+    expect(rejected).toMatchObject({
+      approvalStatus: "rejected",
+      medicalReview: {
+        status: "medical_review_rejected",
+        rejectionReason: "Promessa e linguagem clínica inadequadas para template.",
+      },
+    });
+    expect(canUseCommunicationTemplate(rejected)).toBe(false);
+    expect(() => assertCommunicationTemplateCanBeUsed(rejected)).toThrow(
+      "Communication template must be approved and pass medical review before use",
     );
   });
 

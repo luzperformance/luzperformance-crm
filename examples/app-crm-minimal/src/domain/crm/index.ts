@@ -1,4 +1,5 @@
 export * from "./ads-conversion-export-boundary";
+export * from "./communication-template-workflow";
 export * from "./in-memory-crm-repository";
 export * from "./lead-deal-contract-workflow";
 export * from "./medical-governance-policy";
