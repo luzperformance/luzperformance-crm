@@ -21,14 +21,18 @@ import {
 } from "antd";
 
 import {
+  createContractFromDeal,
   createInMemoryCrmRepository,
   createLeadWithAttribution,
   dealStageLabels,
   dealStages,
   evaluateMedicalGovernancePolicy,
   listPipelineDeals,
+  markContractsDueForRenewal,
   moveDealThroughPipeline,
   moveLeadToDeal,
+  type AttributionChannel,
+  type ContractPlanType,
   type DealStage,
   type InMemoryCrmRepository,
 } from "@/domain/crm";
@@ -66,6 +70,20 @@ const pipelineColumn: CSSProperties = {
   border: "1px solid rgba(201, 164, 74, 0.2)",
   borderRadius: 18,
   background: "rgba(13, 31, 51, 0.74)",
+};
+
+const metricCard: CSSProperties = {
+  height: "100%",
+  border: "1px solid rgba(201, 164, 74, 0.22)",
+  borderRadius: 18,
+  background: "rgba(13, 31, 51, 0.78)",
+};
+
+const dashboardPanel: CSSProperties = {
+  height: "100%",
+  border: "1px solid rgba(201, 164, 74, 0.24)",
+  borderRadius: 20,
+  background: "rgba(20, 42, 66, 0.92)",
 };
 
 const buildDemoPipelineRepository = () => {
@@ -138,7 +156,270 @@ const seedDeal = (
   });
 };
 
+const buildDemoDashboardRepository = () => {
+  const repository = createInMemoryCrmRepository({
+    clock: () => new Date("2026-06-18T12:00:00.000Z"),
+  });
+
+  seedDashboardContract(repository, {
+    fullName: "Lead Blog — contrato semestral",
+    channel: "blog",
+    campaign: "artigo-hipertrofia-segura",
+    articleSlug: "hipertrofia-com-seguranca",
+    articleTitle: "Hipertrofia com segurança médica",
+    cta: "avaliacao-medica",
+    dealTitle: "Contrato semestral Blog",
+    planType: "semiannual",
+    startDate: "2026-06-20",
+    valueCents: 600000,
+    markRenewalAsOf: "2026-12-20",
+  });
+  seedDashboardContract(repository, {
+    fullName: "Lead Ads — contrato anual",
+    channel: "ads",
+    campaign: "google-performance-responsavel",
+    dealTitle: "Contrato anual Ads",
+    planType: "annual",
+    startDate: "2026-07-01",
+    valueCents: 1200000,
+  });
+  seedDashboardContract(repository, {
+    fullName: "Indicação — contrato mensal",
+    channel: "referral",
+    campaign: "indicacao-paciente-ativo",
+    dealTitle: "Contrato mensal indicação",
+    planType: "monthly",
+    startDate: "2026-08-01",
+    valueCents: 100000,
+    markRenewalAsOf: "2026-09-01",
+  });
+  seedDeal(repository, {
+    fullName: "Lead WhatsApp — proposta em aberto",
+    channel: "ads",
+    campaign: "remarketing-whatsapp",
+    title: "Proposta semestral em negociação",
+    stage: "proposal_sent",
+    valueCents: 600000,
+  });
+
+  return repository;
+};
+
+const seedDashboardContract = (
+  repository: InMemoryCrmRepository,
+  input: {
+    fullName: string;
+    channel: "blog" | "ads" | "referral";
+    campaign: string;
+    articleSlug?: string;
+    articleTitle?: string;
+    cta?: string;
+    dealTitle: string;
+    planType: ContractPlanType;
+    startDate: string;
+    valueCents: number;
+    markRenewalAsOf?: string;
+  },
+) => {
+  const { contact, lead } = createLeadWithAttribution(repository, {
+    contact: {
+      fullName: input.fullName,
+    },
+    attribution: {
+      channel: input.channel,
+      campaign: input.campaign,
+    },
+    lead: {
+      lifecycleStage: "sql",
+      interest: "Acompanhamento médico-operacional com redução de danos",
+    },
+  });
+
+  if (input.articleSlug) {
+    repository.ingestBlogContentEvent({
+      articleSlug: input.articleSlug,
+      articleTitle: input.articleTitle,
+      category: "performance",
+      topic: "redução de danos",
+      cta: input.cta ?? "avaliacao-medica",
+      contactId: contact.id,
+      leadId: lead.id,
+      sessionId: `${lead.id}-blog-session`,
+    });
+  }
+
+  const deal = moveLeadToDeal(repository, lead.id, {
+    title: input.dealTitle,
+    stage: "won",
+    valueCents: input.valueCents,
+  });
+  const contract = createContractFromDeal(repository, deal.id, {
+    planType: input.planType,
+    startDate: input.startDate,
+    valueCents: input.valueCents,
+  });
+
+  if (input.markRenewalAsOf) {
+    markContractsDueForRenewal(repository, input.markRenewalAsOf);
+  }
+
+  return contract;
+};
+
+type FunnelDashboardRow = {
+  label: string;
+  count: number;
+  valueCents: number;
+};
+
+type RevenueDashboardRow = {
+  planType: ContractPlanType;
+  label: string;
+  count: number;
+  revenueCents: number;
+};
+
+type AttributionDashboardRow = {
+  channel: AttributionChannel;
+  count: number;
+  revenueCents: number;
+};
+
+type RenewalDashboardRow = {
+  contactName: string;
+  planLabel: string;
+  renewalDueAt: string;
+  valueCents: number;
+};
+
+const buildDashboardSnapshot = (repository: InMemoryCrmRepository) => {
+  const pipelineGroups = listPipelineDeals(repository);
+  const contracts = repository.listContracts();
+  const funnelRows: FunnelDashboardRow[] = pipelineGroups
+    .filter((group) => group.deals.length > 0)
+    .map((group) => ({
+      label: group.label,
+      count: group.deals.length,
+      valueCents: group.deals.reduce((total, deal) => {
+        return total + (deal.valueCents ?? 0);
+      }, 0),
+    }));
+  const revenueRows = contractPlanLabels.map((item) => {
+    const matchingContracts = contracts.filter((contract) => {
+      return contract.planType === item.planType;
+    });
+
+    return {
+      ...item,
+      count: matchingContracts.length,
+      revenueCents: matchingContracts.reduce((total, contract) => {
+        return total + contract.valueCents;
+      }, 0),
+    };
+  });
+  const attributionRows = buildAttributionRows(repository);
+  const renewalRows = contracts
+    .filter((contract) => {
+      return contract.status === "renewal_due";
+    })
+    .map((contract) => ({
+      contactName:
+        repository.getContact(contract.contactId)?.fullName ??
+        "Contato sem nome",
+      planLabel: contractPlanLabelByType[contract.planType],
+      renewalDueAt: contract.renewalDueAt,
+      valueCents: contract.valueCents,
+    }))
+    .sort((left, right) => left.renewalDueAt.localeCompare(right.renewalDueAt));
+  const activeRevenueCents = contracts.reduce((total, contract) => {
+    return total + contract.valueCents;
+  }, 0);
+
+  return {
+    funnelRows,
+    revenueRows,
+    attributionRows,
+    renewalRows,
+    metrics: {
+      funnelDeals: pipelineGroups.reduce((total, group) => {
+        return total + group.deals.length;
+      }, 0),
+      pipelineValueCents: pipelineGroups.reduce((total, group) => {
+        return (
+          total +
+          group.deals.reduce((groupTotal, deal) => {
+            return groupTotal + (deal.valueCents ?? 0);
+          }, 0)
+        );
+      }, 0),
+      activeRevenueCents,
+      renewalDueCount: renewalRows.length,
+    },
+  };
+};
+
+const buildAttributionRows = (
+  repository: InMemoryCrmRepository,
+): AttributionDashboardRow[] => {
+  const rowsByChannel = new Map<AttributionChannel, AttributionDashboardRow>();
+
+  for (const contract of repository.listContracts()) {
+    const attribution = contract.sourceAttributionIds
+      .map((id) => repository.getSourceAttribution(id))
+      .find(Boolean);
+    const channel = attribution?.channel ?? "other";
+    const current = rowsByChannel.get(channel) ?? {
+      channel,
+      count: 0,
+      revenueCents: 0,
+    };
+
+    rowsByChannel.set(channel, {
+      channel,
+      count: current.count + 1,
+      revenueCents: current.revenueCents + contract.valueCents,
+    });
+  }
+
+  return Array.from(rowsByChannel.values()).sort((left, right) => {
+    return right.revenueCents - left.revenueCents;
+  });
+};
+
+const contractPlanLabels: Array<{
+  planType: ContractPlanType;
+  label: string;
+}> = [
+  { planType: "monthly", label: "Mensal" },
+  { planType: "semiannual", label: "Semestral" },
+  { planType: "annual", label: "Anual" },
+];
+
+const contractPlanLabelByType = Object.fromEntries(
+  contractPlanLabels.map((item) => [item.planType, item.label]),
+) as Record<ContractPlanType, string>;
+
+const attributionChannelLabels: Record<AttributionChannel, string> = {
+  blog: "Blog",
+  ads: "Ads",
+  referral: "Indicação",
+  organic: "Orgânico",
+  whatsapp_dm: "WhatsApp/DM",
+  instagram: "Instagram",
+  direct: "Direto",
+  other: "Outro",
+};
+
+const formatCurrency = (valueCents: number) =>
+  `R$ ${(valueCents / 100).toLocaleString("pt-BR")}`;
+
 export const CrmDashboardPage = () => {
+  const [repository] = useState(buildDemoDashboardRepository);
+  const dashboard = useMemo(
+    () => buildDashboardSnapshot(repository),
+    [repository],
+  );
+
   return (
     <main style={shellBackground}>
       <Card style={heroCard} styles={{ body: { padding: 32 } }}>
@@ -164,6 +445,112 @@ export const CrmDashboardPage = () => {
           </Text>
         </Space>
       </Card>
+
+      <Row gutter={[16, 16]} style={{ marginTop: 24 }}>
+        <DashboardMetricCard
+          label="Deals no funil"
+          value={String(dashboard.metrics.funnelDeals)}
+          detail="Visão HubSpot-like por estágio"
+        />
+        <DashboardMetricCard
+          label="Pipeline ponderável"
+          value={formatCurrency(dashboard.metrics.pipelineValueCents)}
+          detail="Receita potencial e contratada"
+        />
+        <DashboardMetricCard
+          label="Receita em contratos"
+          value={formatCurrency(dashboard.metrics.activeRevenueCents)}
+          detail="Mensal, semestral e anual"
+        />
+        <DashboardMetricCard
+          label="Renovações próximas"
+          value={String(dashboard.metrics.renewalDueCount)}
+          detail="Contratos em janela de renovação"
+        />
+      </Row>
+
+      <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
+        <Col xs={24} xl={12}>
+          <Card style={dashboardPanel} styles={{ body: { padding: 24 } }}>
+            <Title level={3} style={{ color: "#ffffff", marginTop: 0 }}>
+              Funil HubSpot-like
+            </Title>
+            <Paragraph style={{ color: "#a0a0a0" }}>
+              Conversão por etapa comercial sem inferir conduta clínica.
+            </Paragraph>
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              {dashboard.funnelRows.map((row) => (
+                <DashboardListRow
+                  key={row.label}
+                  label={row.label}
+                  metric={`${row.count} deal(s)`}
+                  detail={formatCurrency(row.valueCents)}
+                />
+              ))}
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card style={dashboardPanel} styles={{ body: { padding: 24 } }}>
+            <Title level={3} style={{ color: "#ffffff", marginTop: 0 }}>
+              Receita por contrato
+            </Title>
+            <Paragraph style={{ color: "#a0a0a0" }}>
+              Leitura rápida de planos mensal, semestral e anual.
+            </Paragraph>
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              {dashboard.revenueRows.map((row) => (
+                <DashboardListRow
+                  key={row.planType}
+                  label={row.label}
+                  metric={`${row.count} contrato(s)`}
+                  detail={formatCurrency(row.revenueCents)}
+                />
+              ))}
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card style={dashboardPanel} styles={{ body: { padding: 24 } }}>
+            <Title level={3} style={{ color: "#ffffff", marginTop: 0 }}>
+              Atribuição Blog/Ads → receita
+            </Title>
+            <Paragraph style={{ color: "#a0a0a0" }}>
+              Receita agregada por origem/campanha, sem exportar dado sensível.
+            </Paragraph>
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              {dashboard.attributionRows.map((row) => (
+                <DashboardListRow
+                  key={row.channel}
+                  label={attributionChannelLabels[row.channel]}
+                  metric={`${row.count} contrato(s)`}
+                  detail={formatCurrency(row.revenueCents)}
+                />
+              ))}
+            </Space>
+          </Card>
+        </Col>
+        <Col xs={24} xl={12}>
+          <Card style={dashboardPanel} styles={{ body: { padding: 24 } }}>
+            <Title level={3} style={{ color: "#ffffff", marginTop: 0 }}>
+              Renovações e continuidade
+            </Title>
+            <Paragraph style={{ color: "#a0a0a0" }}>
+              Contratos que precisam de ação antes de esfriar a relação.
+            </Paragraph>
+            <Space direction="vertical" size={12} style={{ width: "100%" }}>
+              {dashboard.renewalRows.map((row) => (
+                <DashboardListRow
+                  key={`${row.contactName}-${row.renewalDueAt}`}
+                  label={row.contactName}
+                  metric={row.planLabel}
+                  detail={`${row.renewalDueAt} · ${formatCurrency(row.valueCents)}`}
+                />
+              ))}
+            </Space>
+          </Card>
+        </Col>
+      </Row>
 
       <Row gutter={[24, 24]} style={{ marginTop: 24 }}>
         {crmSections.map((section) => (
@@ -210,6 +597,56 @@ export const CrmDashboardPage = () => {
     </main>
   );
 };
+
+const DashboardMetricCard = ({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) => (
+  <Col xs={24} md={12} xl={6}>
+    <Card style={metricCard} styles={{ body: { padding: 20 } }}>
+      <Text style={{ color: "#a0a0a0", textTransform: "uppercase" }}>
+        {label}
+      </Text>
+      <Title level={2} style={{ color: "#ffffff", margin: "8px 0" }}>
+        {value}
+      </Title>
+      <Text style={{ color: "#e0e0e0" }}>{detail}</Text>
+    </Card>
+  </Col>
+);
+
+const DashboardListRow = ({
+  label,
+  metric,
+  detail,
+}: {
+  label: string;
+  metric: string;
+  detail: string;
+}) => (
+  <Space
+    style={{
+      justifyContent: "space-between",
+      width: "100%",
+      borderBottom: "1px solid rgba(201, 164, 74, 0.14)",
+      paddingBottom: 10,
+    }}
+    align="start"
+  >
+    <Space direction="vertical" size={2}>
+      <Text strong style={{ color: "#ffffff" }}>
+        {label}
+      </Text>
+      <Text style={{ color: "#a0a0a0" }}>{metric}</Text>
+    </Space>
+    <Tag color="gold">{detail}</Tag>
+  </Space>
+);
 
 export const CrmPipelinePage = () => {
   const [repository] = useState(buildDemoPipelineRepository);

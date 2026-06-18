@@ -34,6 +34,11 @@ describe("CRM product shell", () => {
     );
 
     expect(html).toContain("CRM médico-operacional LuzPerformance");
+    expect(html).toContain("Funil HubSpot-like");
+    expect(html).toContain("Receita por contrato");
+    expect(html).toContain("Atribuição Blog/Ads → receita");
+    expect(html).toContain("Renovações e continuidade");
+    expect(html).toContain("Lead Blog — contrato semestral");
 
     for (const section of crmSections) {
       expect(html).toContain(section.title);
