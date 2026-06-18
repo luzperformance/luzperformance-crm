@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   approveCommunicationTemplate,
   assertCommunicationTemplateCanBeUsed,
+  assertSensitiveAccess,
   buildAdsConversionExportBoundary,
   buildCrmDashboardSnapshot,
   buildCommunicationTemplateDraft,
@@ -13,6 +14,7 @@ import {
   createLeadWithAttribution,
   dealStages,
   evaluateMedicalGovernancePolicy,
+  evaluateSensitiveAccess,
   lifecycleStages,
   listPipelineDeals,
   markContractsDueForRenewal,
@@ -1682,5 +1684,122 @@ describe("CRM lead → deal → contract domain model", () => {
         }),
       ]),
     );
+  });
+
+  it("enforces CRM roles before sensitive health access", () => {
+    const operatorDecision = evaluateSensitiveAccess({
+      actorId: "crm-operator-1",
+      actorRole: "crm_operator",
+      action: "read",
+      scope: "sensitive_health_boundary",
+      entityType: "leads",
+      entityId: "leads_1",
+      contactId: "contacts_1",
+      sensitivity: "sensitive_health_data",
+      reason: "Triar relato de exames e sintomas antes de avaliação médica",
+    });
+
+    expect(operatorDecision).toMatchObject({
+      allowed: false,
+      reason: "Role crm_operator cannot access sensitive_health_boundary",
+      requiredRoles: ["owner", "admin", "medical_reviewer"],
+      trace: {
+        actorId: "crm-operator-1",
+        action: "security_access.denied",
+        entityType: "leads",
+        entityId: "leads_1",
+        contactId: "contacts_1",
+        metadata: {
+          actorRole: "crm_operator",
+          accessAction: "read",
+          accessScope: "sensitive_health_boundary",
+          sensitivity: "sensitive_health_data",
+          decision: "denied",
+        },
+      },
+    });
+
+    const medicalReviewerDecision = assertSensitiveAccess({
+      actorId: "dr-vinicius",
+      actorRole: "medical_reviewer",
+      action: "review",
+      scope: "sensitive_health_boundary",
+      entityType: "leads",
+      entityId: "leads_1",
+      contactId: "contacts_1",
+      sensitivity: "sensitive_health_data",
+      reason: "Revisar conteúdo sensível antes de qualquer uso operacional",
+    });
+
+    expect(medicalReviewerDecision).toMatchObject({
+      allowed: true,
+      requiredRoles: ["owner", "admin", "medical_reviewer"],
+      trace: {
+        actorId: "dr-vinicius",
+        action: "security_access.allowed",
+        entityType: "leads",
+        entityId: "leads_1",
+        contactId: "contacts_1",
+        metadata: {
+          actorRole: "medical_reviewer",
+          accessAction: "review",
+          accessScope: "sensitive_health_boundary",
+          sensitivity: "sensitive_health_data",
+          decision: "allowed",
+        },
+      },
+    });
+  });
+
+  it("records access decisions as sanitized audit trace without exporting sensitive data", () => {
+    const repository = createInMemoryCrmRepository({
+      clock: () => new Date("2026-06-18T10:45:00.000Z"),
+    });
+    const contact = repository.createContact({
+      fullName: "Lead com acesso sensível rastreado",
+      email: "rastreamento@example.com",
+    });
+
+    const exportDecision = evaluateSensitiveAccess({
+      actorId: "dr-vinicius",
+      actorRole: "owner",
+      action: "export",
+      scope: "sensitive_health_boundary",
+      entityType: "contacts",
+      entityId: contact.id,
+      contactId: contact.id,
+      sensitivity: "sensitive_health_data",
+      reason: "Exportar relato de testosterona e dose para planilha externa",
+    });
+
+    expect(exportDecision).toMatchObject({
+      allowed: false,
+      reason: "Sensitive health data cannot be exported from the CRM boundary",
+      requiredRoles: [],
+    });
+
+    const accessAuditLog = repository.createAuditLog(exportDecision.trace);
+
+    expect(accessAuditLog).toMatchObject({
+      actorId: "dr-vinicius",
+      action: "security_access.denied",
+      entityType: "contacts",
+      entityId: contact.id,
+      contactId: contact.id,
+      createdAt: "2026-06-18T10:45:00.000Z",
+      metadata: {
+        actorRole: "owner",
+        accessAction: "export",
+        accessScope: "sensitive_health_boundary",
+        sensitivity: "sensitive_health_data",
+        decision: "denied",
+        reason: "Sensitive health data cannot be exported from the CRM boundary",
+        accessReason: "redacted_sensitive_access_reason",
+        accessReasonContainsSensitiveHealthData: true,
+        accessReasonSensitiveTopicCategories: "hormones,dose",
+      },
+    });
+    expect(JSON.stringify(accessAuditLog)).not.toContain("testosterona");
+    expect(JSON.stringify(accessAuditLog)).not.toContain("planilha externa");
   });
 });

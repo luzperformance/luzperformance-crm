@@ -85,7 +85,9 @@ export type AuditAction =
   | "source_attribution.latest_touch_updated"
   | "lifecycle_stage.changed"
   | "deal_stage.changed"
-  | "contract_status.changed";
+  | "contract_status.changed"
+  | "security_access.allowed"
+  | "security_access.denied";
 
 export type CrmCollectionName =
   | "blogContentEvents"
